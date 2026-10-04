@@ -1,0 +1,8 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.12
+pydantic>=2.0
+pydantic-settings>=2.0
+openai>=1.50.0
+PyMuPDF>=1.24.0
+supabase>=2.6.0
