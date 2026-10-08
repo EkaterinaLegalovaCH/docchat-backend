@@ -19,18 +19,17 @@ async def ask_question(request: ChatRequest):
       1. Embed the question
       2. Search the vector store for the most relevant chunks
       3. Build a prompt with context
-      4. Call OpenAI for an answer with citations
+      4. Call the configured chat provider for an answer with citations
 
     If document_ids is omitted, all documents are searched.
     """
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-    if not settings.openai_api_key:
+    if not settings.chat_api_key:
         raise HTTPException(
             status_code=503,
-            detail="OpenAI API key is not configured. "
-                   "Set OPENAI_API_KEY in your .env file and restart.",
+            detail="Chat provider API key is not configured. Set the provider key in your .env file and restart.",
         )
 
     response = rag_ask(

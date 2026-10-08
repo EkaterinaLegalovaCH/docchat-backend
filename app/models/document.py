@@ -1,37 +1,35 @@
-"""
-Pydantic models for document-related API requests and responses.
-"""
+"""Pydantic models for document API responses."""
 
-from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
+from pydantic import BaseModel
 
 
 class DocumentUploadResponse(BaseModel):
-    """Returned after a successful PDF upload."""
     id: str
     filename: str
     page_count: int
     chunk_count: int
+    status: str
+    error_message: Optional[str] = None
     created_at: datetime
 
 
 class DocumentListItem(BaseModel):
-    """A summary of one uploaded document, used in listing."""
     id: str
     filename: str
     page_count: int
     chunk_count: int
+    status: str
+    error_message: Optional[str] = None
     created_at: datetime
 
 
 class DocumentListResponse(BaseModel):
-    """Wrapper for the document list endpoint."""
     documents: list[DocumentListItem]
     total: int
 
 
 class DeleteResponse(BaseModel):
-    """Confirmation after deleting a document."""
     deleted: bool
     document_id: str

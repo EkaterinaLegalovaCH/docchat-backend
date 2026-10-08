@@ -1,0 +1,3 @@
+-- Rejected alternative: local MiniLM embeddings were not selected for DocChat.
+-- Use 002_use_openai_embeddings_1536.sql for the active provider decision.
+-- The previous 384-dimensional migration is intentionally retained as history only.

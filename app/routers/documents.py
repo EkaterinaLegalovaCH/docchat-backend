@@ -1,123 +1,88 @@
-"""
-Documents router — upload, list, and delete PDFs.
-"""
+"""Document upload, listing, and deletion endpoints."""
 
+import logging
 import os
+import tempfile
 import uuid
 from datetime import datetime, timezone
-from typing import List
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile, Request
+
 from app.config import settings
-from app.models.document import (
-    DocumentUploadResponse,
-    DocumentListItem,
-    DocumentListResponse,
-    DeleteResponse,
-)
-from app.services.pdf_processor import extract_text, chunk_text
-from app.db.supabase import insert_chunks, delete_document_chunks, get_chunk_count, get_document_list
+from app.db.supabase import (create_document, delete_chunks, delete_document, insert_chunks,
+                              list_documents as db_list_documents, remove_storage, update_document,
+                              get_client)
+from app.models.document import (DeleteResponse, DocumentListItem, DocumentListResponse,
+                                 DocumentUploadResponse)
+from app.services.pdf_processor import chunk_text, extract_text, validate_pdf
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Allowed file extensions
-ALLOWED_EXTENSIONS = {".pdf"}
+
+def _item(row: dict) -> DocumentListItem:
+    return DocumentListItem(id=row["id"], filename=row.get("filename", ""),
+                            page_count=row.get("page_count", 0), chunk_count=row.get("chunk_count", 0),
+                            status=row.get("status", "processing"), error_message=row.get("error_message"),
+                            created_at=row["created_at"])
 
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=201)
-async def upload_document(file: UploadFile = File(...)):
-    """
-    Upload a PDF file. The file is:
-      1. Saved to the upload directory
-      2. Text is extracted and split into overlapping chunks
-      3. Each chunk is embedded and stored in Supabase
-
-    Returns document metadata including chunk count.
-    """
-    # ── Validate file type ──────────────────────────────────────────────
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type '{ext}'. Only PDFs are allowed.",
-        )
-
-    # ── Save to disk ────────────────────────────────────────────────────
-    document_id = str(uuid.uuid4())
-    safe_name = f"{document_id}{ext}"
-    file_path = os.path.join(settings.upload_dir, safe_name)
-
-    os.makedirs(settings.upload_dir, exist_ok=True)
-    content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
-
+async def upload_document(request: Request, file: UploadFile = File(...)):
+    request_id = str(uuid.uuid4())
+    content = await file.read(settings.max_upload_bytes + 1)
     try:
-        # ── Extract & chunk ─────────────────────────────────────────────
-        page_count, page_texts = extract_text(file_path)
+        validate_pdf(file.filename or "", content, settings.max_upload_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    document_id = str(uuid.uuid4())
+    storage_path = f"{document_id}.pdf"
+    created_row = None
+    stored = False
+    try:
+        client = get_client()
+        client.storage.from_(settings.storage_bucket).upload(
+            storage_path, content, {"content-type": "application/pdf", "upsert": "false"}
+        )
+        stored = True
+        created_row = create_document(document_id, file.filename or "document.pdf", storage_path)
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as temporary:
+            temporary.write(content)
+            temporary.flush()
+            page_count, page_texts = extract_text(temporary.name)
         chunks = chunk_text(page_texts)
+        chunk_count = insert_chunks(document_id, chunks)
+        update_document(document_id, page_count=page_count, chunk_count=chunk_count, status="ready")
+        row = {**created_row, "page_count": page_count, "chunk_count": chunk_count,
+               "status": "ready", "created_at": created_row["created_at"]}
+        return DocumentUploadResponse(**row)
+    except Exception:
+        logger.exception("document processing failed request_id=%s document_id=%s", request_id, document_id)
+        if created_row is not None:
+            try:
+                update_document(document_id, status="failed", error_message="Document processing failed.")
+                delete_chunks(document_id)
+                remove_storage(storage_path)
+            except Exception:
+                logger.exception("document cleanup failed request_id=%s document_id=%s", request_id, document_id)
+        elif stored:
+            try:
+                remove_storage(storage_path)
+            except Exception:
+                logger.exception("storage cleanup failed request_id=%s document_id=%s", request_id, document_id)
+        raise HTTPException(status_code=500, detail="Document processing failed. Please try again.")
 
-        # ── Embed & store ────────────────────────────────────────────────
-        chunk_count = insert_chunks(
-            document_id=document_id,
-            document_name=file.filename or "unnamed.pdf",
-            chunks=chunks,
-        )
 
-        return DocumentUploadResponse(
-            id=document_id,
-            filename=file.filename or "unnamed.pdf",
-            page_count=page_count,
-            chunk_count=chunk_count,
-            created_at=datetime.now(timezone.utc),
-        )
-
-    except Exception as exc:
-        # Clean up the saved file on failure
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.get("/", response_model=DocumentListResponse)
+@router.get("", response_model=DocumentListResponse)
+@router.get("/", response_model=DocumentListResponse, include_in_schema=False)
 async def list_documents():
-    """
-    Return all documents that have been uploaded and indexed.
-    Data comes from the vector store (chunks table).
-    """
-    docs = get_document_list()
-    items = [
-        DocumentListItem(
-            id=d["id"],
-            filename=d["document_name"],
-            page_count=d["page_count"],
-            chunk_count=d["chunk_count"],
-            created_at=datetime.fromisoformat(d["created_at"]) if d.get("created_at") else datetime.now(timezone.utc),
-        )
-        for d in docs
-    ]
-    return DocumentListResponse(documents=items, total=len(items))
+    rows = db_list_documents()
+    return DocumentListResponse(documents=[_item(row) for row in rows], total=len(rows))
 
 
 @router.delete("/{document_id}", response_model=DeleteResponse)
-async def delete_document(document_id: str):
-    """
-    Delete a document and all of its chunks from the vector store.
-    Also removes the uploaded file from disk if it exists.
-    """
-    # Delete from vector store
-    deleted_count = delete_document_chunks(document_id)
-
-    # Delete from disk (try all possible extensions)
-    for ext in ALLOWED_EXTENSIONS:
-        file_path = os.path.join(settings.upload_dir, f"{document_id}{ext}")
-        if os.path.exists(file_path):
-            os.remove(file_path)
-
-    if deleted_count == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No document found with id '{document_id}'.",
-        )
-
+async def remove_document(document_id: str):
+    if not delete_document(document_id):
+        raise HTTPException(status_code=404, detail="Document not found.")
     return DeleteResponse(deleted=True, document_id=document_id)

@@ -77,17 +77,20 @@ def ask(
                    "to answer your question. Try uploading documents first or "
                    "rephrase your question.",
             citations=[],
-            model=settings.openai_model,
+            model=settings.chat_model,
         )
 
     # 3. Build context and prompt
     context = _build_context(similar_chunks)
     system_prompt, user_prompt = _build_prompt(question, context)
 
-    # 4. Call OpenAI
-    client = OpenAI(api_key=settings.openai_api_key)
+    # 4. Call the configured OpenAI-compatible chat provider
+    if not settings.chat_api_key:
+        raise ValueError("Chat provider API key is not configured.")
+
+    client = OpenAI(api_key=settings.chat_api_key)
     response = client.chat.completions.create(
-        model=settings.openai_model,
+        model=settings.chat_model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -112,5 +115,5 @@ def ask(
     return ChatResponse(
         answer=answer_text,
         citations=citations,
-        model=settings.openai_model,
+        model=settings.chat_model,
     )

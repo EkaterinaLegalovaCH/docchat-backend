@@ -1,75 +1,40 @@
-"""
-PDF text extraction using PyMuPDF (fitz).
+"""Small, deterministic PDF validation, extraction, and chunking helpers."""
 
-Given a file path, extracts:
-  - page_count
-  - per-page text content
-  - a list of text chunks suitable for embedding
-"""
-
-import fitz  # PyMuPDF
+from pathlib import Path
 from typing import List, Tuple
+
+import pymupdf
+
+
+def validate_pdf(filename: str, content: bytes, max_bytes: int) -> None:
+    if Path(filename).suffix.lower() != ".pdf":
+        raise ValueError("Only PDF files are allowed.")
+    if len(content) > max_bytes:
+        raise ValueError("The PDF exceeds the 10 MB upload limit.")
+    if not content.startswith(b"%PDF-"):
+        raise ValueError("The uploaded file is not a valid PDF.")
 
 
 def extract_text(path: str) -> Tuple[int, List[str]]:
-    """
-    Extract text from a PDF file.
-
-    Returns (page_count, list_of_page_texts).
-    Each element of page_texts is the full text of one page.
-    """
-    doc = fitz.open(path)
-    page_count = doc.page_count
-    page_texts: list[str] = []
-
-    for page_num in range(page_count):
-        page = doc.load_page(page_num)
-        text = page.get_text().strip()
-        page_texts.append(text)
-
-    doc.close()
-    return page_count, page_texts
+    with pymupdf.open(path) as doc:
+        return doc.page_count, [page.get_text().strip() for page in doc]
 
 
-def chunk_text(
-    page_texts: List[str],
-    chunk_size: int = 1000,
-    overlap: int = 200,
-) -> List[dict]:
-    """
-    Split full-page texts into overlapping chunks suitable for embedding.
-
-    Each chunk dict contains:
-      - text: the chunk text
-      - page_number: which page it came from
-      - chunk_index: the chunk's position within the document
-
-    The overlap ensures that a question spanning a chunk boundary
-    still has a chance to match one of the overlapping chunks.
-    """
+def chunk_text(page_texts: List[str], chunk_size: int = 1000, overlap: int = 200) -> List[dict]:
+    """Split each page into overlapping chunks, retaining page provenance."""
+    if chunk_size <= 0 or overlap < 0 or overlap >= chunk_size:
+        raise ValueError("overlap must be non-negative and smaller than chunk_size")
     chunks: list[dict] = []
-    chunk_index = 0
-
+    step = chunk_size - overlap
     for page_number, page_text in enumerate(page_texts, start=1):
         if not page_text:
             continue
-
-        start = 0
-        while start < len(page_text):
-            end = start + chunk_size
-            chunk_text_content = page_text[start:end]
-
+        for start in range(0, len(page_text), step):
             chunks.append({
-                "text": chunk_text_content,
+                "text": page_text[start:start + chunk_size],
                 "page_number": page_number,
-                "chunk_index": chunk_index,
+                "chunk_index": len(chunks),
             })
-
-            chunk_index += 1
-            # Move forward by (chunk_size - overlap) so consecutive chunks overlap
-            step = chunk_size - overlap
-            if step <= 0:
-                step = chunk_size  # safety: never infinite loop
-            start += step
-
+            if start + chunk_size >= len(page_text):
+                break
     return chunks

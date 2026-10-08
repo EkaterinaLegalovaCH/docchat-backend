@@ -1,41 +1,36 @@
-"""
-OpenAI embedding generation.
-
-Uses the OpenAI API to turn text chunks into vector embeddings
-that can be searched with cosine similarity.
-"""
+"""OpenAI embeddings used by both document indexing and question search."""
 
 from openai import OpenAI
-from typing import List
 
 from app.config import settings
 
 
-def get_client() -> OpenAI:
-    """Return an authenticated OpenAI client (reads API key from settings)."""
-    return OpenAI(api_key=settings.openai_api_key)
+def readiness() -> dict[str, object]:
+    """Report embedding configuration without making a paid API request."""
+    return {
+        "available": bool(settings.openai_api_key),
+        "model": settings.embedding_model,
+        "dimension": settings.embedding_dimension,
+    }
 
 
-def embed_texts(texts: List[str]) -> List[List[float]]:
-    """
-    Embed a list of text strings into vectors.
-
-    Returns a list of vectors, each vector being a list of floats.
-    The model is configured in settings.embedding_model.
-    """
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    """Embed text strings and validate every vector before database insertion."""
+    if not texts:
+        return []
     if not settings.openai_api_key:
-        raise ValueError("OPENAI_API_KEY is not set — cannot generate embeddings.")
+        raise RuntimeError("OpenAI API key is not configured.")
 
-    client = get_client()
-    response = client.embeddings.create(
-        model=settings.embedding_model,
-        input=texts,
-    )
-    # Sort by index so we return in the same order as input
-    ordered = sorted(response.data, key=lambda x: x.index)
-    return [item.embedding for item in ordered]
+    client = OpenAI(api_key=settings.openai_api_key)
+    response = client.embeddings.create(model=settings.embedding_model, input=texts)
+    vectors = [item.embedding for item in response.data]
+    if len(vectors) != len(texts) or any(
+        len(vector) != settings.embedding_dimension for vector in vectors
+    ):
+        raise RuntimeError("Embedding output dimension does not match Supabase schema.")
+    return [[float(value) for value in vector] for vector in vectors]
 
 
-def embed_text(text: str) -> List[float]:
-    """Convenience: embed a single text string."""
+def embed_text(text: str) -> list[float]:
+    """Convenience wrapper for one string."""
     return embed_texts([text])[0]

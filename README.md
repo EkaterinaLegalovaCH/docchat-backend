@@ -1,119 +1,50 @@
-# DocChat — RAG Backend
+# DocChat backend
 
-A FastAPI application that turns uploaded PDFs into a searchable knowledge base.
-Ask questions in natural language; get answers backed by source citations.
+A small FastAPI RAG service: PDFs are validated, stored in Supabase Storage, chunked with PyMuPDF, embedded with OpenAI `text-embedding-3-small`, and searched through a Supabase pgvector RPC. Answers use OpenAI `gpt-4o-mini`.
 
-## Architecture
-
-```
-Upload PDF ──► Extract text ──► Chunk ──► Embed ──► Store in Supabase/pgvector
-                                                            │
-Ask question ──────────────────────────────────────────────► Search top-K chunks
-                                                            │
-                                                    Build prompt + context
-                                                            │
-                                                    OpenAI answer + citations
-```
-
-## Quick Start
+## Local setup
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
-# Fill in your OPENAI_API_KEY, SUPABASE_URL, SUPABASE_KEY
-uvicorn app.main:app --reload
+cp .env.example .env  # fill in values locally; never paste secrets into chat
+chmod 600 .env
+chmod +x run.sh
+./run.sh --reload
+curl http://localhost:8000/api/health
+curl http://localhost:8000/api/ready
 ```
 
-## Supabase Setup
+`/api/health` is liveness only. `/api/ready` reports missing settings or checks Supabase. For a new database, run `supabase/migrations/001_initial_schema.sql`. If the existing Supabase project was created from the earlier 384-dimensional migration, run `supabase/migrations/002_use_openai_embeddings_1536.sql` in the SQL Editor. It removes incompatible chunks, preserves source documents, and marks them for reprocessing. Re-upload the PDFs afterward. Create a **private** Storage bucket named `documents` (or change `STORAGE_BUCKET`).
 
-Run this SQL in the Supabase SQL Editor to create the vector store:
+## Environment
 
-```sql
--- Enable pgvector
-CREATE EXTENSION IF NOT EXISTS vector;
+| Variable | Purpose |
+|---|---|
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_KEY` | backend-only service-role key; never expose it in Vite |
+| `OPENAI_API_KEY` | backend-only OpenAI API key |
+| `OPENAI_MODEL` | answer model, default `gpt-4o-mini` |
+| `EMBEDDING_MODEL` | embedding model, default `text-embedding-3-small` |
+| `CORS_ORIGINS` | comma-separated browser origins |
+| `STORAGE_BUCKET` | private PDF bucket, default `documents` |
+| `MAX_UPLOAD_SIZE_MB` | upload limit, default 10 |
 
--- Create the chunks table
-CREATE TABLE doc_chunks (
-    id UUID PRIMARY KEY,
-    document_id TEXT NOT NULL,
-    document_name TEXT NOT NULL,
-    chunk_index INT NOT NULL,
-    page_number INT NOT NULL,
-    text TEXT NOT NULL,
-    embedding VECTOR(1536),
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+The embedding model returns 1536-dimensional vectors, matching the `vector(1536)` database column and RPC. OpenAI API usage may incur account charges; hosting and model API costs are separate. Local embeddings and xAI/Grok were considered and rejected for this implementation.
 
--- Create the match function for vector search
-CREATE OR REPLACE FUNCTION match_doc_chunks(
-    query_embedding VECTOR(1536),
-    match_threshold FLOAT,
-    match_count INT,
-    filter_document_ids JSONB DEFAULT '[]'::jsonb
-)
-RETURNS TABLE(
-    id UUID,
-    document_id TEXT,
-    document_name TEXT,
-    chunk_index INT,
-    page_number INT,
-    text TEXT,
-    embedding VECTOR(1536),
-    similarity FLOAT
-)
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    RETURN QUERY
-    SELECT
-        dc.id,
-        dc.document_id,
-        dc.document_name,
-        dc.chunk_index,
-        dc.page_number,
-        dc.text,
-        dc.embedding::VECTOR(1536),
-        1 - (dc.embedding <=> query_embedding) AS similarity
-    FROM doc_chunks dc
-    WHERE
-        1 - (dc.embedding <=> query_embedding) > match_threshold
-        AND (
-            filter_document_ids = '[]'::jsonb
-            OR dc.document_id IN (
-                SELECT value::TEXT FROM jsonb_array_elements_text(filter_document_ids)
-            )
-        )
-    ORDER BY similarity DESC
-    LIMIT match_count;
-END;
-$$;
+The unauthenticated portfolio demo is not production multi-user software. The service-role credential must remain only on the backend. Add authentication and rate limiting before exposing it to untrusted users.
 
--- Create an index for faster search (IVFFlat with 100 centroids)
-CREATE INDEX idx_doc_chunks_embedding ON doc_chunks
-    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-```
-
-## API Endpoints
-
-| Method | Path                   | Description                |
-|--------|------------------------|----------------------------|
-| GET    | /api/health            | Health check               |
-| POST   | /api/documents/upload  | Upload a PDF               |
-| GET    | /api/documents/        | List all documents         |
-| DELETE | /api/documents/{id}    | Delete a document          |
-| POST   | /api/chat/ask          | Ask a question             |
-
-## Example
+## API and smoke tests
 
 ```bash
-# Upload a PDF
-curl -X POST http://localhost:8000/api/documents/upload \
-  -F "file=@report.pdf"
-
-# Ask a question
-curl -X POST http://localhost:8000/api/chat/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What are the key findings?"}'
+curl -F 'file=@sample.pdf' http://localhost:8000/api/documents/upload
+curl http://localhost:8000/api/documents
+curl -X DELETE http://localhost:8000/api/documents/<id>
+PYTHONPATH=. .venv/bin/pytest -q
+.venv/bin/python -m compileall -q app
+# Optional external smoke test; requires local .env credentials and a real PDF.
+./scripts/smoke_test.sh path/to/sample.pdf
 ```
+
+Deployment can use Render for the backend and Vercel for the frontend. Configure the backend environment variables in the hosting dashboard and set Vercel's `VITE_API_URL` to the backend URL. Do not deploy until the real upload → retrieval → answer → citations → deletion smoke test passes.

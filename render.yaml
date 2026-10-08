@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: docchat-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: ./run.sh
+    healthCheckPath: /api/health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-small
+      - key: CORS_ORIGINS
+        sync: false
+      - key: STORAGE_BUCKET
+        value: documents
+      - key: MAX_UPLOAD_SIZE_MB
+        value: "10"
