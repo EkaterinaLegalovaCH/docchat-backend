@@ -37,7 +37,7 @@ create trigger documents_set_updated_at before update on public.documents
 for each row execute function public.set_updated_at();
 
 create or replace function public.match_doc_chunks(
-  query_embedding vector(384), match_threshold float, match_count int,
+  query_embedding vector(1536), match_threshold float, match_count int,
   filter_document_ids jsonb default '[]'::jsonb
 ) returns table (id uuid, document_id uuid, filename text, chunk_index int,
   page_number int, content text, similarity float)
