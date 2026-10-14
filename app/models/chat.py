@@ -2,13 +2,15 @@
 Pydantic models for chat / Q&A requests and responses.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
+
+from app.config import settings
 
 
 class ChatRequest(BaseModel):
     """Incoming question from the user."""
-    question: str
+    question: str = Field(min_length=1, max_length=settings.max_question_length)
     document_ids: Optional[list[str]] = None  # filter to these docs; None = all
 
 

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
     storage_bucket: str = "documents"
     max_upload_size_mb: int = 10
+    max_question_length: int = 2000
 
     model_config = SettingsConfigDict(
         env_file=".env",

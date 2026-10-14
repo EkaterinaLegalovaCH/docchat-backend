@@ -8,6 +8,12 @@ def test_health_is_cheap_and_available_without_credentials():
     assert response.json()["status"] == "ok"
 
 
+def test_protected_routes_require_authentication():
+    client = TestClient(app)
+    assert client.get("/api/documents").status_code == 401
+    assert client.post("/api/chat/ask", json={"question": "hello"}).status_code == 401
+
+
 def test_ready_reports_missing_configuration_without_crashing(monkeypatch):
     monkeypatch.setattr("app.main.settings.supabase_url", "")
     monkeypatch.setattr("app.main.settings.supabase_key", "")

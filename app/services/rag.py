@@ -44,6 +44,7 @@ def _build_prompt(question: str, context: str) -> str:
 
 def ask(
     question: str,
+    user_id: str,
     document_ids: Optional[List[str]] = None,
 ) -> ChatResponse:
     """
@@ -67,6 +68,7 @@ def ask(
     top_k = 5
     similar_chunks = search_chunks(
         query_vector=question_vector,
+        user_id=user_id,
         top_k=top_k,
         document_ids=document_ids,
     )

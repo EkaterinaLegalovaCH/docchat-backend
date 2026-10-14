@@ -32,26 +32,26 @@ def check_connection() -> None:
     get_client().table("documents").select("id").limit(1).execute()
 
 
-def create_document(document_id: str, filename: str, storage_path: str) -> dict:
+def create_document(document_id: str, filename: str, storage_path: str, user_id: str) -> dict:
     row = {"id": document_id, "filename": filename, "title": filename,
-           "storage_path": storage_path, "status": "processing"}
+           "storage_path": storage_path, "status": "processing", "user_id": user_id}
     result = get_client().table("documents").insert(row).execute()
     return result.data[0]
 
 
-def update_document(document_id: str, **values: object) -> None:
-    get_client().table("documents").update(values).eq("id", document_id).execute()
+def update_document(document_id: str, user_id: str, **values: object) -> None:
+    get_client().table("documents").update(values).eq("id", document_id).eq("user_id", user_id).execute()
 
 
-def list_documents() -> list[dict]:
+def list_documents(user_id: str) -> list[dict]:
     result = get_client().table("documents").select(
         "id,filename,title,page_count,chunk_count,status,error_message,created_at"
-    ).order("created_at", desc=True).execute()
+    ).eq("user_id", user_id).order("created_at", desc=True).execute()
     return result.data or []
 
 
-def get_document(document_id: str) -> Optional[dict]:
-    result = get_client().table("documents").select("*").eq("id", document_id).limit(1).execute()
+def get_document(document_id: str, user_id: str) -> Optional[dict]:
+    result = get_client().table("documents").select("*").eq("id", document_id).eq("user_id", user_id).limit(1).execute()
     return result.data[0] if result.data else None
 
 
@@ -67,23 +67,23 @@ def insert_chunks(document_id: str, chunks: list[dict]) -> int:
     return len(result.data or [])
 
 
-def search_chunks(query_vector: list[float], top_k: int = 5,
+def search_chunks(query_vector: list[float], user_id: str, top_k: int = 5,
                   document_ids: Optional[list[str]] = None) -> list[SupabaseChunk]:
     params = {"query_embedding": query_vector, "match_threshold": 0.5,
-              "match_count": top_k, "filter_document_ids": document_ids or []}
+              "match_count": top_k, "filter_document_ids": document_ids or [], "filter_user_id": user_id}
     rows = get_client().rpc("match_doc_chunks", params).execute().data or []
     return [_row_to_chunk(row) for row in rows]
 
 
-def delete_document(document_id: str) -> bool:
+def delete_document(document_id: str, user_id: str) -> bool:
     client = get_client()
-    document = get_document(document_id)
+    document = get_document(document_id, user_id)
     if not document:
         return False
     storage_path = document.get("storage_path")
     if storage_path:
         client.storage.from_(settings.storage_bucket).remove([storage_path])
-    client.table("documents").delete().eq("id", document_id).execute()
+    client.table("documents").delete().eq("id", document_id).eq("user_id", user_id).execute()
     return True
 
 
